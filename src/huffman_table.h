@@ -1,24 +1,76 @@
-#include "huffman.h"
+#ifndef HUFFMAN_TABLE_H
+#define HUFFMAN_TABLE_H
 
-#include <stack>
-
-#include <QFile>
+#include <QVector>
 #include <QDebug>
-#include <QStringList>
-#include <QRegExp>
 #include <QStack>
 
-Huffman::Huffman ()
+/**
+ * Class representing huffman table.
+ * Supports only decoding of data.
+ * Typical usage - read () then decode ().
+ */
+
+namespace Huffman
+{
+
+typedef QVector<bool> Code;
+
+template <typename T>
+class HuffmanTable
+{
+  public:
+    HuffmanTable ();
+    ~HuffmanTable ();
+
+    int addElement (const T &element, const Code &code);
+
+    Code encode (const QVector<T> &message, bool *ok = NULL) const;
+    QVector<T> decode (const Code &data, bool *ok = NULL) const;
+
+    Code encodeBest (const QVector<T> &message);
+
+    void clear ();
+
+  private:
+    typedef QHash<T, Code> EncodingTable;
+    struct TreeNode
+    {
+      TreeNode () : left (NULL), right (NULL), element () {}
+
+      bool isLeaf () const { return left == NULL && right == NULL; }
+
+      TreeNode *left, *right;
+      T element;
+
+      Q_DISABLE_COPY (TreeNode);
+    };
+
+    Code findCode (const T &element) const;
+
+    static void deleteTree (TreeNode *node);
+
+    TreeNode *root_;
+
+    EncodingTable encTable_;
+
+    Q_DISABLE_COPY (HuffmanTable);
+};
+
+template <typename T>
+HuffmanTable<T>::HuffmanTable ()
   : root_ (NULL)
 {
 }
 
-Huffman::~Huffman ()
+template <typename T>
+HuffmanTable<T>::~HuffmanTable ()
 {
   this->clear ();
 }
 
-int Huffman::addElement (const quint32 element, const QBitArray &code)
+template <typename T>
+int HuffmanTable<T>::addElement (const T &element, const Code &code)
 {
   /// Adds element to the huffman table.
   /// Returns 0 on success, < 0 if error.
@@ -29,6 +81,14 @@ int Huffman::addElement (const quint32 element, const QBitArray &code)
     {
       root_ = new TreeNode;
     }
+
+    if (encTable_.contains (element))
+    {
+      qDebug () << "Repeated code for element. Skipping.";
+      return -1;
+    }
+
+    encTable_[element] = code;
 
     TreeNode *cur = root_;
     int position = 0;
@@ -60,7 +120,7 @@ int Huffman::addElement (const quint32 element, const QBitArray &code)
     if (!cur->isLeaf ())
     {
       qDebug () << QObject::tr ("Error: Inconsistent huffman table");
-      return -1;
+      return -2;
     }
 
     // FIXME: we could add another variable to TreeNode to check whether
@@ -80,66 +140,38 @@ int Huffman::addElement (const quint32 element, const QBitArray &code)
   return 0;
 }
 
-int Huffman::readFromFile (const QString &filename)
+template <typename T>
+Code HuffmanTable<T>::encode (const QVector<T> &message, bool *ok) const
 {
-  /// Reads huffman decoding table from file.
-  /// Format:
-  /// 30 0
-  /// 888 10
-  /// 999 11
-  /// Returns 0 on success, <0 if error.
+  /// Encodes message according to previously loaded table.
+  /// If error - sets ok to false and returns message encoded so far.
 
-  QFile file (filename);
+  Code res;
 
-  if (!file.open (QIODevice::ReadOnly | QIODevice::Text))
+  if (ok)
+    *ok = false;
+
+  for (typename QVector<T>::const_iterator it = message.begin ();
+      it != message.end (); ++it)
   {
-    qDebug () << QObject::tr ("Cannot open file") << filename;
-    return -1;
-  }
+    Code code = this->findCode (*it);
 
-  int res = 0;
-
-  while (!file.atEnd ())
-  {
-    QRegExp huffLineRegex ("\\s*(\\d+)\\s+([01]+)\\s*");
-    if (!huffLineRegex.exactMatch (file.readLine ()))
+    if (!code.size ())
     {
-      res = -2;
-      break;
+      qDebug () << "Error: cannot encode message: symbol is not in table.";
+      if (ok)
+        *ok = 0;
+      return res;
     }
 
-    QStringList line = huffLineRegex.capturedTexts ();
-
-    bool elementOk = true;
-    bool codeOk = true;
-    quint32 element = line[1].toUInt (&elementOk);
-    QBitArray code = str2ba (line[2], &codeOk);
-
-    if (!elementOk || !codeOk)
-    {
-      res = -2;
-      break;
-    }
-
-    if (this->addElement (element, code) < 0)
-    {
-      res = -3;
-      // We are sure that table is inconsistent, so we need to clear it.
-      this->clear ();
-    }
+    res += code;
   }
-
-  if (res < 0)
-  {
-    qDebug () << QObject::tr ("Error reading file") << filename;
-  }
-
-  file.close ();
 
   return res;
 }
 
-QVector<quint32> Huffman::decode (const QBitArray &data, bool *ok) const
+template <typename T>
+QVector<T> HuffmanTable<T>::decode (const Code &data, bool *ok) const
 {
   /// Decodes data according to loaded huffman table.
   /// If error - sets ok to false and returns decoded array constructed so far.
@@ -147,7 +179,7 @@ QVector<quint32> Huffman::decode (const QBitArray &data, bool *ok) const
   if (ok)
     *ok = true;
 
-  QVector<quint32> res;
+  QVector<T> res;
   if (root_ == NULL)
   {
     qDebug () << QObject::tr ("Error: Table is not initialized.");
@@ -194,7 +226,8 @@ QVector<quint32> Huffman::decode (const QBitArray &data, bool *ok) const
   return res;
 }
 
-void Huffman::clear ()
+template <typename T>
+void HuffmanTable<T>::clear ()
 {
   if (root_)
   {
@@ -204,46 +237,21 @@ void Huffman::clear ()
   root_ = NULL;
 }
 
-QBitArray Huffman::str2ba (const QString &str, bool *ok)
+template <typename T>
+Code HuffmanTable<T>::findCode (const T &element) const
 {
-  /// Converts string to bitarray.
-  /// If error - sets ok to false and returns array constructed so far.
+  typename EncodingTable::const_iterator it = encTable_.find (element);
 
-  if (ok)
-    *ok = true;
-
-  QBitArray ba (str.size ());
-
-  for (int i = 0; i < str.size (); ++i)
+  if (it == encTable_.end ())
   {
-    if (str[i] == '1')
-      ba[i] = true;
-    else if (str[i] != '0')
-    {
-      if (ok)
-        *ok = false;
-      return ba;
-    }
+    return Code ();
   }
 
-  return ba;
+  return it.value ();
 }
 
-QString Huffman::ba2str (const QBitArray &ba)
-{
-  /// Converts bitarray to string
-
-  QString str;
-
-  for (int i = 0; i < ba.size (); ++i)
-  {
-    str += ba[i] ? "1" : "0";
-  }
-
-  return str;
-}
-
-void Huffman::deleteTree (TreeNode *node)
+template <typename T>
+void HuffmanTable<T>::deleteTree (TreeNode *node)
 {
   // Realization was switched from recursive to stack based to handle
   // the (unlikely) case of very large tree.
@@ -269,3 +277,7 @@ void Huffman::deleteTree (TreeNode *node)
   deleteTree (node->right);
 *****************************************************/
 }
+
+}
+
+#endif // HUFFMAN_H
